@@ -9,9 +9,36 @@ from google import genai
 from google.genai.types import GenerateContentConfig, Part
 import streamlit as st
 
+import google.auth
+import httpx
+
+
+def _project_id() -> str:
+    """Use the Google Auth helper (via the metadata service) to get the Google Cloud Project"""
+    try:
+        _, project = google.auth.default()
+    except google.auth.exceptions.DefaultCredentialsError as e:
+        raise Exception("Could not automatically determine credentials") from e
+    if not project:
+        raise Exception("Could not determine project from credentials.")
+    return project
+
+
+def _region() -> str:
+    """Use the local metadata service to get the region"""
+    try:
+        resp = httpx.get(
+            "http://metadata.google.internal/computeMetadata/v1/instance/region",
+            headers={"Metadata-Flavor": "Google"},
+        )
+        return resp.text.split("/")[-1]
+    except httpx.RequestError as e:
+        raise Exception(f"Could not determine region. Error: {e}") from e
+
+
 API_KEY = os.environ.get("GOOGLE_API_KEY")
-PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT")
-LOCATION = os.environ.get("GOOGLE_CLOUD_REGION")
+PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", _project_id())
+LOCATION = os.environ.get("GOOGLE_CLOUD_REGION", _region())
 
 if PROJECT_ID and not LOCATION:
     LOCATION = "us-central1"
@@ -30,7 +57,10 @@ MODELS = {
 def load_client() -> genai.Client:
     """Load Google Gen AI Client."""
     return genai.Client(
-        vertexai=True, project=PROJECT_ID, location=LOCATION, api_key=API_KEY
+        vertexai=True,
+        project=PROJECT_ID,
+        location=LOCATION,
+        api_key=API_KEY,
     )
 
 
@@ -44,9 +74,88 @@ def get_model_name(name: str | None) -> str:
 st.header(":sparkles: Gemini API in Vertex AI", divider="rainbow")
 client = load_client()
 
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["Generate story", "Marketing campaign", "Image Playground", "Video Playground"]
+freeform_tab, tab1, tab2, tab3, tab4 = st.tabs(
+    [
+        "Freeform",
+        "Generate story",
+        "Marketing campaign",
+        "Image Playground",
+        "Video Playground",
+    ]
 )
+
+
+with freeform_tab:
+    st.subheader("Enter Your Own Prompt")
+
+    selected_model = st.radio(
+        "Select Model:",
+        MODELS.keys(),
+        format_func=get_model_name,
+        key="selected_model_freeform",
+        horizontal=True,
+    )
+
+    temperature = st.slider(
+        "Select the temperature (Model Randomness):",
+        min_value=0.0,
+        max_value=2.0,
+        value=0.5,
+        step=0.05,
+        key="temperature",
+    )
+
+    max_output_tokens = st.slider(
+        "Maximum Number of Tokens to Generate:",
+        min_value=1,
+        max_value=8192,
+        value=2048,
+        step=1,
+        key="max_output_tokens",
+    )
+
+    top_p = st.slider(
+        "Select the Top P",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.95,
+        step=0.05,
+        key="top_p",
+    )
+
+    prompt = st.text_area(
+        "Enter your prompt here...",
+        key="prompt",
+        height=200,
+    )
+
+    config = GenerateContentConfig(
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        top_p=top_p,
+    )
+
+    generate_freeform = st.button("Generate", key="generate_freeform")
+    if generate_freeform and prompt:
+        with st.spinner(
+            f"Generating response using {get_model_name(selected_model)} ..."
+        ):
+            first_tab1, first_tab2 = st.tabs(["Response", "Prompt"])
+            with first_tab1:
+                response = client.models.generate_content(
+                    model=selected_model,
+                    contents=prompt,
+                    config=config,
+                ).text
+
+                if response:
+                    st.markdown(response)
+            with first_tab2:
+                st.markdown(
+                    f"""Parameters:\n- Model ID: `{selected_model}`\n- Temperature: `{temperature}`\n- Top P: `{top_p}`\n- Max Output Tokens: `{max_output_tokens}`\n"""
+                )
+                st.code(prompt, language="markdown")
+
 
 with tab1:
     st.subheader("Generate a story")
